@@ -3,6 +3,7 @@ import blenderproc as bproc
 import argparse
 import copy
 import os
+import shutil
 
 import bpy # type: ignore
 import numpy as np
@@ -402,6 +403,13 @@ def ensure_output_dir(output_dir):
     print(f"Directory '{output_dir}' already exists.")
 
 
+def copy_source_mesh_to_output(mesh_path, output_dir):
+    mesh_filename = os.path.basename(mesh_path)
+    destination_path = os.path.join(output_dir, mesh_filename)
+    shutil.copy2(mesh_path, destination_path)
+    print(f"Copied source mesh to '{destination_path}'.")
+
+
 def save_render_outputs(data, current_poses, output_dir, config, K_matrix, z_max):
     width = config["cam"]["width"]
     height = config["cam"]["height"]
@@ -458,6 +466,7 @@ def render_mesh_entry(entry, config, original_poses):
     data = bproc.renderer.render()
 
     ensure_output_dir(entry["output_dir"])
+    copy_source_mesh_to_output(entry["obj_path"], entry["output_dir"])
     save_render_outputs(
         data,
         current_poses,
