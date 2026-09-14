@@ -15,7 +15,6 @@ import packaging.version
 
 from torch_kdtree import build_kd_tree
 
-from collections import defaultdict
 import requests
 import time
 import argparse
@@ -283,21 +282,22 @@ def main(args):
         R = object_mesh.get_rotation_matrix_from_axis_angle([np.pi / 2, 0, 0])
         object_mesh.rotate(R, center=(0, 0, 0))
     
-    object_pcd = object_mesh.sample_points_uniformly(number_of_points=100000)
-
-    obb = object_pcd.get_oriented_bounding_box()
+    obb = object_mesh.get_oriented_bounding_box()
     diagonal_length = np.sqrt(obb.extent[0]**2 + obb.extent[1]**2 + obb.extent[2]**2)
     voxel_size = diagonal_length / 85
     print("Voxel size:", voxel_size)
+
+    object_pcd = object_mesh.sample_points_uniformly(number_of_points=100000)
 
     object_pcd_downsampled = object_pcd.voxel_down_sample(voxel_size = voxel_size)
     
     voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(object_pcd,
                                                                 voxel_size = voxel_size)
     voxels = voxel_grid.get_voxels()
-    voxels_centers = np.array([voxel_grid.get_voxel_center_coordinate(voxels[i].grid_index) for i in range(len(voxels))])
+    grid_indices = np.array([v.grid_index for v in voxels], dtype=np.float32)
+    voxels_centers = voxel_grid.origin + (grid_indices + 0.5) * voxel_size
     
-    voxels_centers_tensor = torch.Tensor(voxels_centers).cuda()
+    voxels_centers_tensor = torch.from_numpy(voxels_centers).float().to(device)
     torch_kdtree = build_kd_tree(voxels_centers_tensor)
     
     # Separate files into different lists
@@ -313,7 +313,15 @@ def main(args):
     if args.aggregation == 'alignment':
         normals_files = sorted([f for f in all_files if f.startswith('normals_') and f.endswith('.png')])
     
-    poses = np.load(path_to_views + "/obj_poses.npy")
+    poses = np.load(os.path.join(path_to_views, "obj_poses.npy"))
+
+    if len(rgb_files) == 0:
+        raise ValueError(f"No RGB files found in {path_to_views}")
+
+    # Pre-calculate image dimensions once to avoid opening images repeatedly in loop
+    sample_img = Image.open(os.path.join(path_to_views, rgb_files[0]))
+    img_size = sample_img.size[::-1]  # (height, width)
+    new_size = max(img_size)
     
     # Extract semantic features based on the selected model
     if args.semantic_desc == 'dino':
@@ -324,143 +332,45 @@ def main(args):
         print("Using DIFT for semantic feature extraction...")
         feature_dim = 1280
         semantic_batch_mode = False
+
+    num_voxels = len(voxels_centers_tensor)
     
     # Prepare tensors to store descriptors based on aggregation method
     if args.aggregation == 'alignment':
         # Alignment-based: need to store per-view descriptors and angles
-        view_angles = torch.zeros([len(voxel_grid.get_voxels()), len(rgb_files)]).cuda()
-        point_feats = torch.zeros([len(rgb_files), len(voxel_grid.get_voxels()), feature_dim]).cuda()
+        view_angles = torch.zeros([num_voxels, len(rgb_files)], device=device)
+        voxel_feats = torch.zeros([len(rgb_files), num_voxels, feature_dim], device=device)
+        voxel_scores_accum = torch.zeros(num_voxels, device=device)
     else:  # args.aggregation == 'average'
         # Simple averaging: accumulate descriptors and count
-        view_count = torch.zeros([len(voxel_grid.get_voxels())]).cuda()
-        point_feats = torch.zeros([len(voxel_grid.get_voxels()), feature_dim]).cuda()
+        view_count = torch.zeros(num_voxels, device=device)
+        voxel_feats = torch.zeros([num_voxels, feature_dim], device=device)
 
-    # Pre-allocate tensors outside the loop
-    voxel_centers_camera = torch.empty((len(voxels_centers_tensor), 3), device=device)
+    # Reusable buffers for GPU scatter operations per frame
+    voxel_feats_accum = torch.zeros((num_voxels, feature_dim), device=device)
+    voxel_counts = torch.zeros(num_voxels, device=device)
 
     # Start iterating over all the frames
-    if args.aggregation == 'alignment':
-        # Alignment-based aggregation
+    with torch.inference_mode():
         for idx, (rgb_file, pcd_file, pose) in enumerate(zip(rgb_files, pcd_files, poses)):    
             print(f"Integrating file {idx}.")
         
-            points = np.load(os.path.join(path_to_views,pcd_file))
-            points_cleaned = points[~np.isnan(points).any(axis=1)]
-            query_points = torch.Tensor(points_cleaned).cuda()
-        
-            # Load normals for alignment calculation
-            normals_file = normals_files[idx]
-            normals = Image.open(os.path.join(path_to_views, normals_file))
-            normals = np.array(normals)
-            normals = normals.reshape(points.shape)/255
-            normals = normals * 2 -1
-            normals = normals[~np.isnan(points).any(axis=1)]
-
-            pose_torch = torch.Tensor(pose).cuda()
-        
-            # Transform voxel centers into the camera frame
-            voxel_centers_h = torch.cat((voxels_centers_tensor, torch.ones(len(voxels_centers_tensor), 1, device=device)), dim=1).T
-            voxel_centers_camera = (pose_torch @ voxel_centers_h).T[:, :3]
+            points = np.load(os.path.join(path_to_views, pcd_file))
+            valid_pts_mask = ~np.isnan(points).any(axis=1)
+            points_cleaned = points[valid_pts_mask]
+            query_points = torch.from_numpy(points_cleaned).float().to(device)
+            pose_torch = torch.from_numpy(pose).float().to(device)
         
             if args.debug_alignment:
                 pcd1 = o3d.geometry.PointCloud()
-                pcd1.points = o3d.utility.Vector3dVector((pose @ np.hstack([np.array(object_pcd_downsampled.points),np.ones((np.array(object_pcd_downsampled.points).shape[0],1))]).T).T[:, :3])
-                pcd1.paint_uniform_color(np.array([1.,0.,0.]))
+                pcd1.points = o3d.utility.Vector3dVector((pose @ np.hstack([np.array(object_pcd_downsampled.points), np.ones((np.array(object_pcd_downsampled.points).shape[0], 1))]).T).T[:, :3])
+                pcd1.paint_uniform_color(np.array([1., 0., 0.]))
                 pcd2 = o3d.geometry.PointCloud()
                 pcd2.points = o3d.utility.Vector3dVector(points_cleaned)
-                pcd2.paint_uniform_color(np.array([0.,1.,0.]))
+                pcd2.paint_uniform_color(np.array([0., 1., 0.]))
         
-                frame =  o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2, )
-                frame2 =  o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2, )
-                frame2 = frame2.transform(pose)
-        
-                o3d.visualization.draw_geometries([pcd1, pcd2, frame, frame2])
-        
-            # Extract semantic features for this view
-            if semantic_batch_mode:  # DINO
-                semantic_fts = batch_semantic_fts[idx]
-                padding_top, padding_bottom, padding_left, padding_right = padding_info
-                img_size = np.array(Image.open(os.path.join(path_to_views, rgb_file))).shape[:2]
-                new_size = max(img_size)
-                semantic_fts = semantic_fts.unsqueeze(0)
-            else:  # DIFT
-                semantic_fts, _, padding_info = extract_dift_features(args, rgb_file, path_to_views)
-                padding_top, padding_bottom, padding_left, padding_right = padding_info
-                img_size = np.array(Image.open(os.path.join(path_to_views, rgb_file))).shape[:2]
-                new_size = max(img_size)
-        
-            semantic_fts_upsampled = nn.Upsample(size=(new_size,new_size), mode='bilinear')(semantic_fts)
-            semantic_fts_upsampled = semantic_fts_upsampled[:, :, padding_top:new_size-padding_bottom, padding_left:new_size-padding_right]
-        
-            semantic_fts_reshaped = semantic_fts_upsampled.view(1,semantic_fts_upsampled.shape[1],-1)
-            semantic_fts_reshaped = semantic_fts_reshaped[:,:,~np.isnan(points).any(axis=1)]
-        
-            k = 1   
-            points_object = transform_points_to_object_frame_torch(query_points, pose_torch)
-            _, inds = torch_kdtree.query(points_object, nr_nns_searches=k)
-
-            # calculate dot product of normals with z axis
-            dot_product = np.dot(normals, np.array([0, 0, 1]))
-            point_alignment_scores = dot_product
-        
-            voxel_to_points = defaultdict(list)
-            for point_idx, voxel_idx in enumerate(inds):  
-                voxel_to_points[voxel_idx.item()].append(point_idx)
-
-            # Initialize a tensor for voxel alignment scores for the current view
-            voxel_alignment_scores_current_view = torch.zeros(len(voxels_centers_tensor), device=device)
-
-            for voxel_idx, point_indices in voxel_to_points.items():
-                # Get the alignment scores for all points associated with this voxel
-                scores_for_voxel_points = point_alignment_scores[point_indices]
-                
-                # Aggregate (e.g., average)
-                voxel_alignment_scores_current_view[voxel_idx] = scores_for_voxel_points.mean()
-        
-            angles = voxel_alignment_scores_current_view
-
-            # Store the view angles for the current view
-            view_angles[:, idx] = angles
-            
-            # Average descriptors for each voxel
-            for voxel_idx, point_indices in voxel_to_points.items():
-                # Store the average descriptor in the point_feats tensor for the current view
-                point_feats[idx, voxel_idx, :] = torch.stack([semantic_fts_reshaped[0, :, idx] for idx in point_indices], dim=0).mean(dim=0)
-        
-        # Apply softmax on view_angles to compute weights
-        view_weights = torch.nn.functional.softmax(view_angles, dim=1)
-        
-        # Weighted aggregation of descriptors across views
-        view_weights = view_weights.permute(1, 0)  # Shape becomes [num_views, num_voxels]
-        
-        # 3D semantic descriptors
-        final_semantic_voxel_descriptors = torch.einsum('vw,vwc->wc', view_weights, point_feats)  # Weighted sum
-        
-    else:  # args.aggregation == 'average'
-        # Simple averaging aggregation
-        for idx, (rgb_file, pcd_file, pose) in enumerate(zip(rgb_files, pcd_files, poses)):    
-            print(f"Integrating file {idx}.")
-        
-            points = np.load(os.path.join(path_to_views,pcd_file))
-            points_cleaned = points[~np.isnan(points).any(axis=1)]
-            query_points = torch.Tensor(points_cleaned).cuda()
-        
-            pose_torch = torch.Tensor(pose).cuda()
-        
-            # Transform voxel centers into the camera frame
-            voxel_centers_h = torch.cat((voxels_centers_tensor, torch.ones(len(voxels_centers_tensor), 1, device=device)), dim=1).T
-            voxel_centers_camera = (pose_torch @ voxel_centers_h).T[:, :3]
-        
-            if args.debug_alignment:
-                pcd1 = o3d.geometry.PointCloud()
-                pcd1.points = o3d.utility.Vector3dVector((pose @ np.hstack([np.array(object_pcd_downsampled.points),np.ones((np.array(object_pcd_downsampled.points).shape[0],1))]).T).T[:, :3])
-                pcd1.paint_uniform_color(np.array([1.,0.,0.]))
-                pcd2 = o3d.geometry.PointCloud()
-                pcd2.points = o3d.utility.Vector3dVector(points_cleaned)
-                pcd2.paint_uniform_color(np.array([0.,1.,0.]))
-        
-                frame =  o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2, )
-                frame2 =  o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2, )
+                frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
+                frame2 = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
                 frame2 = frame2.transform(pose)
         
                 o3d.visualization.draw_geometries([pcd1, pcd2, frame, frame2])
@@ -469,39 +379,63 @@ def main(args):
             if semantic_batch_mode:  # DINO
                 semantic_fts = batch_semantic_fts[idx].unsqueeze(0)
                 padding_top, padding_bottom, padding_left, padding_right = padding_info
-                img_size = np.array(Image.open(os.path.join(path_to_views, rgb_file))).shape[:2]
-                new_size = max(img_size)
             else:  # DIFT
                 semantic_fts, _, padding_info = extract_dift_features(args, rgb_file, path_to_views)
                 padding_top, padding_bottom, padding_left, padding_right = padding_info
-                img_size = np.array(Image.open(os.path.join(path_to_views, rgb_file))).shape[:2]
-                new_size = max(img_size)
         
-            semantic_fts_upsampled = nn.Upsample(size=(new_size,new_size), mode='bilinear')(semantic_fts)
+            semantic_fts_upsampled = nn.Upsample(size=(new_size, new_size), mode='bilinear')(semantic_fts)
             semantic_fts_upsampled = semantic_fts_upsampled[:, :, padding_top:new_size-padding_bottom, padding_left:new_size-padding_right]
         
-            semantic_fts_reshaped = semantic_fts_upsampled.view(1,semantic_fts_upsampled.shape[1],-1)
-            semantic_fts_reshaped = semantic_fts_reshaped[:,:,~np.isnan(points).any(axis=1)]
+            semantic_fts_reshaped = semantic_fts_upsampled.view(1, semantic_fts_upsampled.shape[1], -1)
+            semantic_fts_reshaped = semantic_fts_reshaped[:, :, valid_pts_mask]
         
             k = 1   
             points_object = transform_points_to_object_frame_torch(query_points, pose_torch)
             _, inds = torch_kdtree.query(points_object, nr_nns_searches=k)
-        
-            voxel_to_points = defaultdict(list)
-            for point_idx, voxel_idx in enumerate(inds):
-                voxel_to_points[voxel_idx.item()].append(point_idx)
+            inds_1d = inds.squeeze(-1)
 
-            # Simple averaging: accumulate descriptors and count for each voxel
-            for voxel_idx, point_indices in voxel_to_points.items():
-                point_feats[voxel_idx] += torch.stack([semantic_fts_reshaped[0, :, idx] for idx in point_indices], dim=0).mean(dim=0)
-                view_count[voxel_idx] += 1
+            pts_fts = semantic_fts_reshaped[0].T  # Shape: [N_points, feature_dim]
 
-            torch.cuda.empty_cache()
-            
-        # Average the accumulated features by dividing by the count
-        # Avoid division by zero by adding a small epsilon where count is zero
-        view_count = view_count.unsqueeze(1)  # Make it broadcastable
-        final_semantic_voxel_descriptors = point_feats / (view_count + 1e-8)
+            # Accumulate features and counts per voxel on GPU in parallel
+            voxel_feats_accum.zero_()
+            voxel_counts.zero_()
+            voxel_feats_accum.index_add_(0, inds_1d, pts_fts)
+            voxel_counts.index_add_(0, inds_1d, torch.ones_like(inds_1d, dtype=torch.float32))
+
+            valid_voxels = voxel_counts > 0
+            view_voxel_mean_feats = torch.zeros((num_voxels, feature_dim), device=device)
+            view_voxel_mean_feats[valid_voxels] = voxel_feats_accum[valid_voxels] / voxel_counts[valid_voxels].unsqueeze(1)
+
+            if args.aggregation == 'alignment':
+                # Load normals for alignment calculation
+                normals_file = normals_files[idx]
+                normals = Image.open(os.path.join(path_to_views, normals_file))
+                normals = np.array(normals).reshape(points.shape) / 255.0 * 2.0 - 1.0
+                normals = normals[valid_pts_mask]
+
+                # calculate dot product of normals with z axis
+                dot_product = torch.from_numpy(normals[:, 2]).float().to(device)
+
+                voxel_scores_accum.zero_()
+                voxel_scores_accum.index_add_(0, inds_1d, dot_product)
+
+                view_voxel_mean_scores = torch.zeros(num_voxels, device=device)
+                view_voxel_mean_scores[valid_voxels] = voxel_scores_accum[valid_voxels] / voxel_counts[valid_voxels]
+
+                view_angles[:, idx] = view_voxel_mean_scores
+                voxel_feats[idx, :, :] = view_voxel_mean_feats
+            else:  # args.aggregation == 'average'
+                voxel_feats += view_voxel_mean_feats
+                view_count += valid_voxels.float()
+
+        if args.aggregation == 'alignment':
+            # Apply softmax on view_angles to compute weights
+            view_weights = torch.nn.functional.softmax(view_angles, dim=1)
+            view_weights = view_weights.permute(1, 0)  # Shape becomes [num_views, num_voxels]
+            final_semantic_voxel_descriptors = torch.einsum('vw,vwc->wc', view_weights, voxel_feats)
+        else:  # args.aggregation == 'average'
+            view_count_unsq = view_count.unsqueeze(1)
+            final_semantic_voxel_descriptors = voxel_feats / (view_count_unsq + 1e-8)
     
     ## Clean up semantic model
     if args.semantic_desc == 'dift' and hasattr(extract_dift_features, 'dift'):
@@ -509,13 +443,11 @@ def main(args):
         torch.cuda.empty_cache()
     
     ## Remove unobserved voxels before computing geometric descriptors
-    rows_with_all_zeros = np.all(final_semantic_voxel_descriptors.cpu().numpy() < 1e-15, axis=1)
-    indices_of_all_zero_rows = np.where(rows_with_all_zeros)[0]
-
     final_semantic_voxel_descriptors_normalized = final_semantic_voxel_descriptors / (torch.norm(final_semantic_voxel_descriptors, dim=1, keepdim=True) + 1e-8)
-    final_semantic_voxel_descriptors_normalized = np.delete(final_semantic_voxel_descriptors_normalized.cpu().numpy(), indices_of_all_zero_rows, axis=0)
+    valid_voxels_mask = (torch.norm(final_semantic_voxel_descriptors, dim=1) >= 1e-15).cpu().numpy()
 
-    voxels_centers = np.delete(voxels_centers, indices_of_all_zero_rows, axis=0)
+    final_semantic_voxel_descriptors_normalized = final_semantic_voxel_descriptors_normalized[valid_voxels_mask].cpu().numpy()
+    voxels_centers = voxels_centers[valid_voxels_mask]
     
     ## Now retrieve geometric descriptors
     pcd_voxels = o3d.geometry.PointCloud()
