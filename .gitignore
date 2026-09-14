@@ -1,0 +1,8 @@
+Pipfile*
+
+__pycache__/
+
+output
+predefined_poses
+
+custom_templates_cfg.yaml

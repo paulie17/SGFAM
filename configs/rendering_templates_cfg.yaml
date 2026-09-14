@@ -1,0 +1,33 @@
+model_dir:  #path to mesh files
+model_index:  # index of the mesh to be used, None for all meshes  
+model_name:   # name of the mesh to be used, None for all meshes
+models_category:  # category of the mesh to be used, None for all meshes
+
+mesh_scale: 0.001 # set scale of meshes expects the mesh to be in mm. If meter set to "1000"
+preferred_mesh_extension: ".glb" # optional; set to .ply, .glb, or .obj to only render that mesh type
+skip_mesh_keywords: ["fixed", "simplified", "manifold"] # optional; filenames containing any of these substrings will be skipped
+z_max: 50.0 # optional; maximum retained depth value when exporting point clouds
+light_layout: "distributed" # optional; use "distributed" for cube lights or "two-points" for a harsher two-light setup
+material:
+  blend_file: "PorcelainMaterials.blend" # path to a .blend file, absolute or relative to this config file
+  name: "Cube" # optional; required when the .blend file exposes more than one material holder object
+dataset_name: "test" # dataset_name
+output_dir: "output" # output folder
+obj_pose: "predefined_poses/obj_poses_level0.npy" # level 0:  42 poses, level 1: 162 poses
+cam_pose: "predefined_poses/cam_poses_level0.npy" # level 2: 642 poses, level 3: 2562 poses for more poses check readme
+poses: "all" # all -> templates from all angles, upper -> templates from upper hemisphere
+camera_distance_scaling: 1.3 # scaling of camera distance: smaller -> closer
+
+cam:
+  height: 480
+  width: 640
+  K:
+    - 538.391033533567
+    - 0.0
+    - 315.3074696331638
+    - 0.0
+    - 538.085452058436
+    - 233.0483557773859
+    - 0.0
+    - 0.0
+    - 1.0
