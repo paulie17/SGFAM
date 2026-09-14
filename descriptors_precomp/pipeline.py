@@ -41,7 +41,7 @@ if packaging.version.parse(torch.__version__) >= packaging.version.parse('1.12.0
     torch.backends.cuda.matmul.allow_tf32 = True
 
 try:
-    from descriptors_precomp.dift_sd import SDFeaturizer4Eval
+    from dift_sd import SDFeaturizer4Eval
     DIFT_AVAILABLE = True
 except ImportError:
     print("Warning: DIFT dependencies not available. DIFT functionality will be disabled.")
