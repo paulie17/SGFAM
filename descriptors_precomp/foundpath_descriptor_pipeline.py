@@ -13,7 +13,22 @@ import torch
 import torch.nn as nn
 import packaging.version
 
-from torch_kdtree import build_kd_tree
+def knn_1_torch(query_pts: torch.Tensor, voxel_centers: torch.Tensor, chunk_size: int = 16384) -> torch.Tensor:
+    """
+    Computes 1-Nearest-Neighbor index for each query point to voxel centers.
+    Pure PyTorch GPU matrix math (zero C++/CUDA compilation required).
+    """
+    num_queries = query_pts.shape[0]
+    inds = torch.empty(num_queries, dtype=torch.long, device=query_pts.device)
+    v_norms = (voxel_centers ** 2).sum(dim=1)
+
+    for i in range(0, num_queries, chunk_size):
+        chunk = query_pts[i:i + chunk_size]
+        q_norms = (chunk ** 2).sum(dim=1, keepdim=True)
+        dist_sq = torch.addmm(q_norms + v_norms, chunk, voxel_centers.T, beta=1.0, alpha=-2.0)
+        inds[i:i + chunk_size] = dist_sq.argmin(dim=1)
+
+    return inds
 
 import requests
 import time
@@ -298,7 +313,6 @@ def main(args):
     voxels_centers = voxel_grid.origin + (grid_indices + 0.5) * voxel_size
     
     voxels_centers_tensor = torch.from_numpy(voxels_centers).float().to(device)
-    torch_kdtree = build_kd_tree(voxels_centers_tensor)
     
     # Separate files into different lists
     exclude_prefixes = ('mask_', 'depth_', 'normals_')
@@ -389,10 +403,8 @@ def main(args):
             semantic_fts_reshaped = semantic_fts_upsampled.view(1, semantic_fts_upsampled.shape[1], -1)
             semantic_fts_reshaped = semantic_fts_reshaped[:, :, valid_pts_mask]
         
-            k = 1   
             points_object = transform_points_to_object_frame_torch(query_points, pose_torch)
-            _, inds = torch_kdtree.query(points_object, nr_nns_searches=k)
-            inds_1d = inds.squeeze(-1)
+            inds_1d = knn_1_torch(points_object, voxels_centers_tensor)
 
             pts_fts = semantic_fts_reshaped[0].T  # Shape: [N_points, feature_dim]
 
