@@ -1,8 +1,10 @@
 Pipfile*
 
 __pycache__/
+.vscode/
 
 output
 predefined_poses
 
 custom_templates_cfg.yaml
+
