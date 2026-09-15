@@ -1,12 +1,12 @@
 # SGFAM: Semantic and Geometric Features Aggregation for Dense Shape Matching in Generalizable Robotic Manipulation
 
-[![IEEE RA-L](https://img.shields.io/badge/IEEE-RA--L%202026-blue.svg)](https://ieeexplore.ieee.org/)
+[![IEEE RA-L](https://img.shields.io/badge/IEEE-RA--L%202026-blue.svg)](https://ieeexplore.ieee.org/abstract/document/11488498)
 [![Python 3.10](https://img.shields.io/badge/Python-3.10-green.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-CUDA%2012.4-blue.svg)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Official repository to reproduce the method and experiments from the IEEE Robotics and Automation Letters (RA-L 2026) paper:  
-**"SGFAM: Semantic and Geometric Features Aggregation for Dense Shape Matching in Generalizable Robotic Manipulation"**  
+[**"SGFAM: Semantic and Geometric Features Aggregation for Dense Shape Matching in Generalizable Robotic Manipulation"**](https://ieeexplore.ieee.org/abstract/document/11488498)  
 *Paolo Sebeto, Christian Hartl-Nesic, Jean-Baptiste Weibel, Daniel Zimmer, Andreas Holzinger, and Markus Vincze.*
 
 ---
