@@ -36,7 +36,11 @@ Automating continuous surface processing tasks—such as industrial polishing, p
 
 1. **Alignment-Based Semantic Aggregation**:  
    For each occupied voxel $v$ and view $i$, the cosine similarity between the voxel's average surface normal $\bar{\mathbf{n}}_{v,i}$ and the camera optical axis $\mathbf{z}_i$ yields an alignment score:
-   $$\omega_{v,i} = - \frac{\bar{\mathbf{n}}_{v,i}^\text{T}}{\|\bar{\mathbf{n}}_{v,i}\|} \mathbf{z}_i$$
+
+   $$
+   \omega_{v,i} = - \frac{\bar{\mathbf{n}}_{v,i}^\text{T}}{\|\bar{\mathbf{n}}_{v,i}\|} \mathbf{z}_i
+   $$
+
    Scores are normalized via softmax across views ($\hat{\omega}_{v,i}$), producing the view-weighted semantic feature $\mathbf{s}_v = \sum_{i} \hat{\omega}_{v,i} \bar{\mathbf{f}}_{v,i}$.
 
 2. **Kernel PCA Descriptor Fusion**:  
@@ -44,7 +48,11 @@ Automating continuous surface processing tasks—such as industrial polishing, p
 
 3. **Functional Map Optimization & Mapping**:  
    Given Laplace-Beltrami Operator (LBO) eigenfunctions $\mathbf{\Phi}_\text{S}, \mathbf{\Phi}_\text{T}$, the functional map $\mathbf{C}$ preserves projected descriptors $\mathbf{F}, \mathbf{G}$ alongside isometric, commutativity, and entropy regularizations:
-   $$\min_{\mathbf{C}} \|\mathbf{C}\mathbf{F} - \mathbf{G}\|^2 + \alpha E_{\text{iso}} + \beta E_{\text{comm}} + \gamma E_{\text{entropy}} + \delta E_{\text{soft}}$$
+
+   $$
+   \min_{\mathbf{C}} \|\mathbf{C}\mathbf{F} - \mathbf{G}\|^2 + \alpha E_{\text{iso}} + \beta E_{\text{comm}} + \gamma E_{\text{entropy}} + \delta E_{\text{soft}}
+   $$
+
    The dense point-to-point correspondence matrix $\mathbf{\Pi}$ is recovered via $\mathbf{\Pi} = \mathbf{\Phi}_\text{T} \mathbf{C} \mathbf{\Phi}_\text{S}^\dagger$.
 
 ---
