@@ -63,7 +63,6 @@ SGFAM/
 │   ├── docker-compose.yml        # Docker Compose configuration for microservices
 │   ├── fcgf_server.py            # FCGF WarpConvNet REST server (Port 8000)
 │   └── gedi_server.py            # GeDi REST server (Port 5000)
-├── predefined_poses/             # Camera trajectory poses for multi-view rendering
 ├── rendering/                    # BlenderProc / synthetic rendering utilities
 │   ├── generate_poses.py        # Generate icosphere camera sampling poses
 │   └── render_mesh_templates.py # Render multi-view RGBD, normals & masks
@@ -82,15 +81,18 @@ SGFAM/
 
 ### 1. Environment Setup
 
-Clone the repository and install dependencies using `pipenv` or `pip`:
+Clone the repository and install the dependencies from `requirements.txt` into your preferred Python environment (e.g., `venv`, `conda`, or `pipenv`):
 
 ```bash
-git clone https://github.com/paolosebeto/SGFAM.git
+git clone https://github.com/paulie17/SGFAM.git
 cd SGFAM
 
-# Install dependencies with Pipenv
-pipenv install
-pipenv shell
+# Create and activate a virtual environment (e.g., venv)
+python -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 ### 2. Geometric Descriptors Microservices (Docker)
@@ -119,9 +121,16 @@ cd ..
 
 ## 🚀 Step-by-Step Workflow
 
-### Step 1: Multi-View Mesh Rendering (BlenderProc)
+### Step 1: Generate Camera Poses & Render Multi-View Meshes (BlenderProc)
 
-Render multi-view RGB-D images, object masks, camera poses, and surface normals of textured 3D models using `BlenderProc`:
+First, generate the icosphere camera sampling poses (saved to `predefined_poses/`):
+
+```bash
+# Generate icosphere camera sampling poses
+blenderproc run rendering/generate_poses.py
+```
+
+Then, render multi-view RGB-D images, object masks, camera poses, and surface normals of textured 3D models using `BlenderProc`:
 
 ```bash
 # Render mesh templates defined in the configuration file
@@ -157,14 +166,14 @@ Run the main SGFAM inference script to fuse descriptors via KPCA, compute the fu
 
 ```bash
 python sgfam_inference.py \
-    --input_1 path/to/source_descriptors_dino_fcgf.npz \
-    --input_2 path/to/target_descriptors_dino_fcgf.npz \
-    --reduce_dim \
-    --pca_type kernel \
-    --target_dim 128 \
-    --n_ev 50 \
-    --input_traj_path path/to/source_trajectory.txt \
-    --save_target_traj \
+    --input-1 path/to/source_descriptors_dino_fcgf.npz \
+    --input-2 path/to/target_descriptors_dino_fcgf.npz \
+    --reduce-dim \
+    --pca-type kernel \
+    --target-dim 128 \
+    --n-ev 50 \
+    --input-traj-path path/to/source_trajectory.txt \
+    --save-target-traj \
     --animation
 ```
 
@@ -172,24 +181,24 @@ python sgfam_inference.py \
 
 | Flag | Description | Default |
 | :--- | :--- | :--- |
-| `--input_1` | Path to the source `.npz` descriptor file | **Required** |
-| `--input_2` | Path to the target `.npz` descriptor file | **Required** |
-| `--reduce_dim` | Flag to enable descriptor dimensionality reduction via PCA/KPCA | `False` |
-| `--pca_type` | PCA method: `kernel` (Kernel PCA) or `linear` | `kernel` |
-| `--target_dim` | Target feature dimension after PCA/KPCA reduction | `128` |
-| `--n_ev` | Number of Laplace-Beltrami Operator (LBO) eigenfunctions | `50` |
+| `--input-1` | Path to the source `.npz` descriptor file | **Required** |
+| `--input-2` | Path to the target `.npz` descriptor file | **Required** |
+| `--reduce-dim` | Flag to enable descriptor dimensionality reduction via PCA/KPCA | `False` |
+| `--pca-type` | PCA method: `kernel` (Kernel PCA) or `linear` | `kernel` |
+| `--target-dim` | Target feature dimension after PCA/KPCA reduction | `128` |
+| `--n-ev` | Number of Laplace-Beltrami Operator (LBO) eigenfunctions | `50` |
 | `--simplify` | Simplify mesh using watertight decimation | `False` |
-| `--only_sem` | Use only semantic descriptors for shape matching | `False` |
-| `--only_geom` | Use only geometric descriptors for shape matching | `False` |
-| `--input_traj_path` | Path to source 3D trajectory text file to transfer | `None` |
-| `--save_target_traj` | Save transferred trajectory text file for target mesh | `False` |
-| `--save_input_traj` | Save source input trajectory text file | `False` |
-| `--scale_input_traj` | Scale factor for input trajectory points | `1.0` |
+| `--only-sem` | Use only semantic descriptors for shape matching | `False` |
+| `--only-geom` | Use only geometric descriptors for shape matching | `False` |
+| `--input-traj_path` | Path to source 3D trajectory text file to transfer | `None` |
+| `--save-target_traj` | Save transferred trajectory text file for target mesh | `False` |
+| `--save-input_traj` | Save source input trajectory text file | `False` |
+| `--scale-input_traj` | Scale factor for input trajectory points | `1.0` |
 | `--scale` | Units for trajectory output (`m` or `mm`) | `m` |
 | `--animation` | Interactively animate target path LRF coordinate frames | `False` |
-| `--load_colors` | Extract vertex colors from UV texture maps | `False` |
-| `--save_emb_meshes` | Save PLY meshes colored with functional map embeddings | `False` |
-| `--output_directory` | Directory path to save output trajectory and mapping results | `""` |
+| `--load-colors` | Extract vertex colors from UV texture maps | `False` |
+| `--save-emb-meshes` | Save PLY meshes colored with functional map embeddings | `False` |
+| `--output-directory` | Directory path to save output trajectory and mapping results | `""` |
 
 ---
 

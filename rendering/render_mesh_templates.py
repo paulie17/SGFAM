@@ -514,7 +514,7 @@ def load_config(config_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("config_path", default="mesh_templates_cfg.yaml", help="Path to config file")
+    parser.add_argument("config-path", default="mesh_templates_cfg.yaml", help="Path to config file")
     args = parser.parse_args()
 
     dirname = os.path.dirname(__file__)
