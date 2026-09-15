@@ -1,17 +1,95 @@
-import open3d as o3d
-import numpy as np
-from sklearn.decomposition import PCA
-from PIL import Image, ImageOps
-from scipy.spatial import cKDTree
-from torchvision import transforms
-import warnings
+#!/usr/bin/env python
+# PYTHON_ARGCOMPLETE_OK
+from __future__ import annotations
 
 import os
 import sys
+import argparse
 
-import torch
-import torch.nn as nn
-import packaging.version
+MESH_EXTENSIONS = {'.ply', '.obj', '.glb'}
+
+# Global placeholders for heavy libraries, lazily initialized in main()
+o3d = None
+np = None
+PCA = None
+Image = None
+ImageOps = None
+cKDTree = None
+transforms = None
+torch = None
+nn = None
+requests = None
+time = None
+DIFT_AVAILABLE = False
+DINO_AVAILABLE = True
+
+def _init_heavy_modules():
+    global o3d, np, PCA, Image, ImageOps, cKDTree, transforms, torch, nn, requests, time, DIFT_AVAILABLE, DINO_AVAILABLE
+    if o3d is not None:
+        return
+    import open3d as _o3d
+    import numpy as _np
+    from sklearn.decomposition import PCA as _PCA
+    from PIL import Image as _Image, ImageOps as _ImageOps
+    from scipy.spatial import cKDTree as _cKDTree
+    from torchvision import transforms as _transforms
+    import torch as _torch
+    import torch.nn as _nn
+    import requests as _requests
+    import time as _time
+    import warnings
+    import packaging.version
+
+    o3d, np, PCA, Image, ImageOps, cKDTree, transforms, torch, nn, requests, time = (
+        _o3d, _np, _PCA, _Image, _ImageOps, _cKDTree, _transforms, _torch, _nn, _requests, _time
+    )
+
+    if packaging.version.parse(torch.__version__) >= packaging.version.parse('1.12.0'):
+        torch.backends.cuda.matmul.allow_tf32 = True
+
+    try:
+        from dift_sd import SDFeaturizer4Eval
+        DIFT_AVAILABLE = True
+    except ImportError:
+        DIFT_AVAILABLE = False
+
+    try:
+        from sfast.compilers.diffusion_pipeline_compiler import compile, CompilationConfig
+        SFAST_AVAILABLE = True
+    except ImportError:
+        SFAST_AVAILABLE = False
+
+    warnings.filterwarnings(
+        "ignore",
+        message=r"xFormers is available.*",
+        category=UserWarning,
+    )
+
+    if DIFT_AVAILABLE and SFAST_AVAILABLE:
+        config = CompilationConfig.Default()
+        try:
+            import xformers
+            config.enable_xformers = True
+        except ImportError:
+            pass
+        try:
+            import triton
+            config.enable_triton = True
+        except ImportError:
+            pass
+        config.enable_cuda_graph = True
+        config.enable_fused_linear_geglu = False
+
+
+if DIFT_AVAILABLE:
+    def quantize_unet(m):
+        from diffusers.utils import USE_PEFT_BACKEND
+        assert USE_PEFT_BACKEND
+        m = torch.quantization.quantize_dynamic(m, {torch.nn.Linear},
+                                                dtype=torch.qint8,
+                                                inplace=True)
+        return m
+
 
 def knn_1_torch(query_pts: torch.Tensor, voxel_centers: torch.Tensor, chunk_size: int = 16384) -> torch.Tensor:
     """
@@ -29,64 +107,6 @@ def knn_1_torch(query_pts: torch.Tensor, voxel_centers: torch.Tensor, chunk_size
         inds[i:i + chunk_size] = dist_sq.argmin(dim=1)
 
     return inds
-
-import requests
-import time
-import argparse
-
-MESH_EXTENSIONS = {'.ply', '.obj', '.glb'}
-
-# DIFT-specific imports
-if packaging.version.parse(torch.__version__) >= packaging.version.parse('1.12.0'):
-    torch.backends.cuda.matmul.allow_tf32 = True
-
-try:
-    from dift_sd import SDFeaturizer4Eval
-    DIFT_AVAILABLE = True
-except ImportError:
-    print("Warning: DIFT dependencies not available. DIFT functionality will be disabled.")
-    DIFT_AVAILABLE = False
-
-try:
-    from sfast.compilers.diffusion_pipeline_compiler import compile, CompilationConfig
-    SFAST_AVAILABLE = True
-except ImportError:
-    print("Warning: stable-fast not available. DIFT will run without compilation optimizations.")
-    SFAST_AVAILABLE = False
-
-DINO_AVAILABLE = True
-
-warnings.filterwarnings(
-    "ignore",
-    message=r"xFormers is available.*",
-    category=UserWarning,
-)
-
-# DIFT configuration
-if DIFT_AVAILABLE and SFAST_AVAILABLE:
-    config = CompilationConfig.Default()
-    try:
-        import xformers
-        config.enable_xformers = True
-    except ImportError:
-        print('xformers not installed, skip')
-    try:
-        import triton
-        config.enable_triton = True
-    except ImportError:
-        print('Triton not installed, skip')
-    config.enable_cuda_graph = True
-    config.enable_fused_linear_geglu = False
-
-
-if DIFT_AVAILABLE:
-    def quantize_unet(m):
-        from diffusers.utils import USE_PEFT_BACKEND
-        assert USE_PEFT_BACKEND
-        m = torch.quantization.quantize_dynamic(m, {torch.nn.Linear},
-                                                dtype=torch.qint8,
-                                                inplace=True)
-        return m
 
 
 def transform_points_to_object_frame_torch(points_camera:torch.Tensor, 
@@ -258,6 +278,7 @@ def extract_dift_features(args, rgb_file, path_to_views):
 
 
 def main(args):
+    _init_heavy_modules()
     save = args.save
     visualize = args.visualize
     
@@ -589,7 +610,13 @@ def main(args):
         if args.output_name is not None:
             output_file_name = args.output_name.replace(args.suffix, '') + ".npz"
         else:
-            output_file_name = model_name.replace(args.suffix, '') + ".npz"
+            clean_model_name = model_name.replace(args.suffix, '')
+            sem_part = f"dino_{args.dino_size}" if args.semantic_desc == 'dino' else args.semantic_desc
+            if only_semantic:
+                filename = f"{clean_model_name}_{sem_part}.npz"
+            else:
+                filename = f"{clean_model_name}_{sem_part}_{args.geometric_desc}.npz"
+            output_file_name = os.path.join(path_to_views, filename)
     
         if only_semantic:
             np.savez(output_file_name, 
@@ -612,7 +639,7 @@ def main(args):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description='Unified FoundPath descriptor extraction pipeline with configurable semantic and geometric descriptors.')
+    parser = argparse.ArgumentParser(description='Unified FoundPath descriptor extraction pipeline with configurable semantic and geometric descriptors.')    
     parser.add_argument('--templates-path', type=str, required=True,
                        help='Path to directory containing rendered templates and exactly one mesh file (.ply/.obj/.glb)')
     parser.add_argument('--semantic-desc', type=str, choices=['dino', 'dift'], default='dino', 
@@ -642,6 +669,12 @@ if __name__ == "__main__":
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--rotate', action='store_true')
 
-    args = parser.parse_args()
+    try:
+        import argcomplete
+        argcomplete.autocomplete(parser)
+    except ImportError:
+        pass
 
+    args = parser.parse_args()
+    
     main(args)
