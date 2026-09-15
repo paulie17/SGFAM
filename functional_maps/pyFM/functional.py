@@ -5,11 +5,7 @@ import torch
 
 import numpy as np
 import scipy.optimize
-from scipy.optimize import fmin, fmin_powell, fmin_cg, fmin_bfgs, fmin_ncg, fmin_tnc, fmin_cobyla, fmin_slsqp, fmin_l_bfgs_b, linear_sum_assignment
 from functional_maps.pyFM.mesh import geometry
-from functional_maps.pyFM.refine import mesh_icp_refine
-
-import functional_maps.pyFM.signatures as sg
 import functional_maps.pyFM.optimize as opt_func
 import functional_maps.pyFM.spectral as spectral
 def sigmoid(z):
@@ -62,10 +58,7 @@ class FunctionalMapping:
         self.descr2 = None
 
         # FUNCTIONAL MAP
-        self._FM_type = 'classic'
         self._FM_base = None
-        self._FM_icp = None
-        self._FM_zo = None
 
         # AREA AND CONFORMAL SHAPE DIFFERENCE OPERATORS
         self.SD_a = None
@@ -118,52 +111,17 @@ class FunctionalMapping:
     def k2(self, k2):
         self._k2 = k2
 
-    # FUNCTIONAL MAP SWITCHER (REFINED OR NOT)
-    @property
-    def FM_type(self):
-        """
-        Returns the type of functional map currently used
-
-        Returns
-        ----------------
-        FM_type : str
-            'classic' | 'icp' | 'zoomout'
-        """
-        return self._FM_type
-
-    @FM_type.setter
-    def FM_type(self, FM_type):
-        if FM_type.lower() not in ['classic', 'icp', 'zoomout']:
-            raise ValueError(f'FM_type can only be set to "classic", "icp" or "zoomout", not {FM_type}')
-        self._FM_type = FM_type
-
-    def change_FM_type(self, FM_type):
-        """
-        Changes the type of functional map to use
-
-        Parameters
-        ----------------
-        FM_type : str
-            'classic' | 'icp' | 'zoomout'
-        """
-        self.FM_type = FM_type
-
     @property
     def FM(self):
         """
-        Returns the current functional map depending on the value of FM_type
+        Returns the current functional map
 
         Returns
         ----------------
         FM :
             (k2,k1) current FM
         """
-        if self.FM_type.lower() == 'classic':
-            return self._FM_base
-        elif self.FM_type.lower() == 'icp':
-            return self._FM_icp
-        elif self.FM_type.lower() == 'zoomout':
-            return self._FM_zo
+        return self._FM_base
 
     @FM.setter
     def FM(self, FM):
@@ -304,29 +262,8 @@ class FunctionalMapping:
         if descr1 is not None and descr2 is not None:
             self.descr1 = descr1
             self.descr2 = descr2
-        elif descr_type == 'HKS':
-            self.descr1 = sg.mesh_HKS(self.mesh1, n_descr, k=self.k1)  # (N1, n_descr)
-            self.descr2 = sg.mesh_HKS(self.mesh2, n_descr, k=self.k2)  # (N2, n_descr)
-
-            if use_lm:
-                lm_descr1 = sg.mesh_HKS(self.mesh1, n_descr,landmarks=lmks1, k=self.k1)  # (N1, p*n_descr)
-                lm_descr2 = sg.mesh_HKS(self.mesh2, n_descr, landmarks=lmks2, k=self.k2)  # (N2, p*n_descr)
-
-                self.descr1 = np.hstack([self.descr1, lm_descr1])  # (N1, (p+1)*n_descr)
-                self.descr2 = np.hstack([self.descr2, lm_descr2])  # (N2, (p+1)*n_descr)
-
-        elif descr_type == 'WKS':
-            self.descr1 = sg.mesh_WKS(self.mesh1, n_descr, k=self.k1)  # (N1, n_descr)
-            self.descr2 = sg.mesh_WKS(self.mesh2, n_descr, k=self.k2)  # (N2, n_descr)
-
-            if use_lm:
-                lm_descr1 = sg.mesh_WKS(self.mesh1, n_descr, landmarks=lmks1, k=self.k1)  # (N1, p*n_descr)
-                lm_descr2 = sg.mesh_WKS(self.mesh2, n_descr, landmarks=lmks2, k=self.k2)  # (N2, p*n_descr)
-
-                self.descr1 = np.hstack([self.descr1, lm_descr1])  # (N1, (p+1)*n_descr)
-                self.descr2 = np.hstack([self.descr2, lm_descr2])  # (N2, (p+1)*n_descr)
         else:
-            raise ValueError(f'Descriptor type "{descr_type}" not implemented')
+            raise ValueError("Descriptors descr1 and descr2 must be provided.")
 
         # Subsample descriptors
         self.descr1 = self.descr1[:, np.arange(0, self.descr1.shape[1], subsample_step)]
@@ -559,61 +496,6 @@ class FunctionalMapping:
         if verbose:
             print("\tTask : {task}, funcall : {funcalls}, nit : {nit}, warnflag : {warnflag}".format(**res.message))
             print(f'\tDone in {opt_time:.2f} seconds')
-
-    def icp_refine(self, nit=10, tol=None, use_adj=False, overwrite=True, verbose=False, n_jobs=1):
-        """
-        Refines the functional map using ICP and saves the result
-
-        Parameters
-        -------------------
-        nit       : int
-            number of iterations of icp to apply
-        tol       : float
-            threshold of change in functional map in order to stop refinement
-                    (only applies if nit is None)
-        overwrite : bool
-            If True changes FM type to 'icp' so that next call of self.FM
-                    will be the icp refined FM
-        """
-        if not self.fitted:
-            raise ValueError("The Functional map must be fit before refining it")
-
-        self._FM_icp = mesh_icp_refine(self.FM, self.mesh1, self.mesh2, nit=nit, tol=tol, return_p2p=False,
-                                                   use_adj=use_adj, n_jobs=n_jobs, verbose=verbose)
-
-        if overwrite:
-            self.FM_type = 'icp'
-
-    def zoomout_refine(self, nit=10, step=1, subsample=None, overwrite=True, verbose=False):
-        """
-        Refines the functional map using ZoomOut and saves the result
-
-        Parameters
-        -------------------
-        nit       : int
-            number of iterations to do
-        step      : int
-            increase in dimension at each Zoomout Iteration
-        subsample : int
-            number of points to subsample for ZoomOut. If None or 0, no subsampling is done.
-        overwrite : bool
-            If True changes FM type to 'zoomout' so that next call of self.FM
-            will be the zoomout refined FM (larger than the other 2)
-        """
-        if not self.fitted:
-            raise ValueError("The Functional map must be fit before refining it")
-
-        if subsample is None or subsample == 0:
-            sub = None
-        else:
-            sub1 = self.mesh1.extract_fps(subsample)
-            sub2 = self.mesh2.extract_fps(subsample)
-            sub = (sub1,sub2)
-
-        self._FM_zo = pyFM.refine.mesh_zoomout_refine(self.FM, self.mesh1, self.mesh2, nit,
-                                                      step=step, subsample=sub, verbose=verbose)
-        if overwrite:
-            self.FM_type = 'zoomout'
 
     def compute_SD(self):
         """

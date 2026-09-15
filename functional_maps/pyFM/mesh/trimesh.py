@@ -3,7 +3,6 @@ import time
 
 import numpy as np
 
-from . import file_utils
 from . import geometry as geom
 from . import laplacian
 import scipy.linalg
