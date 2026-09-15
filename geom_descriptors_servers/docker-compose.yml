@@ -1,0 +1,34 @@
+services:
+  gedi_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: gedi_server
+    image: gedi_server
+    container_name: gedi_server
+    network_mode: "host"
+    runtime: "nvidia"
+    ports:
+      - "5000:5000"
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+    privileged: true
+    restart: unless-stopped
+
+  fcgf_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fcgf_server
+    image: fcgf_server
+    container_name: fcgf_server
+    network_mode: "host"
+    runtime: "nvidia"
+    ports:
+      - "8000:8000"
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+    privileged: true
+    restart: unless-stopped
