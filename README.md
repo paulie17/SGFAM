@@ -24,28 +24,9 @@ Automating continuous surface processing tasks—such as industrial polishing, p
 1. **Alignment-Based Multi-View Aggregation**: Prioritizes semantic features extracted from Vision Foundation Models (VFMs such as DINOv2 or DIFT) based on surface normal alignment with camera optical axes, filtering out view-dependent noise.
 2. **Multi-Resolution Geometric Features**: Augments high-level semantic context with local spatial precision using deep multi-resolution geometric encoders (FCGF, GeDi) or handcrafted descriptors (FPFH).
 3. **Non-Linear Descriptor Fusion via Kernel PCA (KPCA)**: Unfolds the complex non-linear feature space resulting from concatenating semantic and geometric descriptors using Gaussian RBF Kernel PCA.
-4. **Spectral Functional Map Inference & Path Transfer**: Solves for a compact functional map matrix $\mathbf{C}$ to recover a dense point-to-point correspondence matrix $\mathbf{\Pi}$, enabling direct transfer of continuous surface paths for robotic execution.
-
----
-
-## ⚙️ Pipeline Architecture
+4. **Spectral Functional Map Inference & Path Transfer**: Solves for a compact functional map matrix to recover a dense point-to-point correspondence matrix, enabling direct transfer of continuous surface paths for robotic execution.
 
 ![SGFAM Flowchart](assets/FoundPath_flowchart.png)
-
-### Mathematical Formulation
-
-1. **Alignment-Based Semantic Aggregation**:  
-   For each occupied voxel $v$ and view $i$, the cosine similarity between the voxel's average surface normal $\bar{\mathbf{n}}_{v,i}$ and the camera optical axis $\mathbf{z}_i$ yields an alignment score:
-   $$\omega_{v,i} = - \frac{\bar{\mathbf{n}}_{v,i}^\text{T}}{\|\bar{\mathbf{n}}_{v,i}\|} \mathbf{z}_i$$
-   Scores are normalized via softmax across views ($\hat{\omega}_{v,i}$), producing the view-weighted semantic feature $\mathbf{s}_v = \sum_{i} \hat{\omega}_{v,i} \bar{\mathbf{f}}_{v,i}$.
-
-2. **Kernel PCA Descriptor Fusion**:  
-   Semantic vector $\mathbf{s}_v$ and geometric vector $\mathbf{g}_v$ are concatenated into $[\mathbf{s}_v; \mathbf{g}_v]$ and projected into a unified 128-dimensional space using Kernel PCA with an RBF Gaussian kernel.
-
-3. **Functional Map Optimization & Mapping**:  
-   Given Laplace-Beltrami Operator (LBO) eigenfunctions $\mathbf{\Phi}_\text{S}, \mathbf{\Phi}_\text{T}$, the functional map $\mathbf{C}$ preserves projected descriptors $\mathbf{F}, \mathbf{G}$ alongside isometric, commutativity, and entropy regularizations:
-   $$\min_{\mathbf{C}} \|\mathbf{C}\mathbf{F} - \mathbf{G}\|^2 + \alpha E_{\text{iso}} + \beta E_{\text{comm}} + \gamma E_{\text{entropy}} + \delta E_{\text{soft}}$$
-   The dense point-to-point correspondence matrix $\mathbf{\Pi}$ is recovered via $\mathbf{\Pi} = \mathbf{\Phi}_\text{T} \mathbf{C} \mathbf{\Phi}_\text{S}^\dagger$.
 
 ---
 
